@@ -23,7 +23,7 @@ DEPLOYED_SHA_FILE="${STATE_DIR}/deployed-sha"
 if [[ -n "${1:-}" && "${INSTALL_TIMER}" != true ]]; then echo "Usage: $0 [--install-timer]" >&2; exit 2; fi
 if [[ ${EUID} -ne 0 ]]; then echo "Run this script with sudo." >&2; exit 1; fi
 
-for command in git nginx certbot curl openssl ss getent systemctl install runuser flock sed cmp; do
+for command in git nginx certbot curl openssl ss getent systemctl journalctl install runuser flock sed cmp; do
   command -v "${command}" >/dev/null 2>&1 || { echo "Missing command: ${command}" >&2; exit 1; }
 done
 id "${DEPLOY_USER}" >/dev/null 2>&1 || { echo "Unknown deployment user: ${DEPLOY_USER}" >&2; exit 1; }
@@ -34,6 +34,21 @@ run_as_deployer() {
   if [[ "${DEPLOY_USER}" == root ]]; then env HOME="${DEPLOY_HOME}" "$@"; else runuser -u "${DEPLOY_USER}" -- env HOME="${DEPLOY_HOME}" "$@"; fi
 }
 run_shell() { run_as_deployer bash -lc "$1"; }
+
+wait_for_app() {
+  local attempt
+  for attempt in {1..30}; do
+    if curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "${APP_SERVICE} did not become healthy on 127.0.0.1:${PORT}." >&2
+  systemctl --no-pager --full status "${APP_SERVICE}" >&2 || true
+  journalctl --no-pager -u "${APP_SERVICE}" -n 80 >&2 || true
+  return 1
+}
 
 install_timer() {
   local tmp
@@ -116,7 +131,7 @@ systemctl daemon-reload
 systemctl enable "${APP_SERVICE}"
 systemctl restart "${APP_SERVICE}"
 
-curl -fsS --retry 10 --retry-delay 2 "http://127.0.0.1:${PORT}/health" >/dev/null
+wait_for_app
 
 resolved_ips="$(getent ahostsv4 "${DOMAIN}" | awk '{print $1}' | sort -u)"
 grep -Fxq "${EXPECTED_IP}" <<< "${resolved_ips}" || { echo "DNS must resolve ${DOMAIN} to ${EXPECTED_IP}; found: ${resolved_ips:-none}" >&2; exit 1; }
