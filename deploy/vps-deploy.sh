@@ -11,15 +11,19 @@ APP_SERVICE="${DOMAIN}.service"
 AUTO_DEPLOY_NAME="toscani-tenekeu-portfolio-auto-deploy"
 NGINX_SITE="/etc/nginx/sites-available/${DOMAIN}"
 NGINX_LINK="/etc/nginx/sites-enabled/${DOMAIN}"
+NGINX_BOOTSTRAP="${APP_DIR}/deploy/portfolio.toscani-tenekeu.com.nginx"
+NGINX_TLS="${APP_DIR}/deploy/portfolio.toscani-tenekeu.com.tls.nginx"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-hello@toscani.tenekeu.com}"
 DEPLOY_USER="${DEPLOY_USER:-${SUDO_USER:-root}}"
 INSTALL_TIMER=false
+STATE_DIR="/var/lib/${AUTO_DEPLOY_NAME}"
+DEPLOYED_SHA_FILE="${STATE_DIR}/deployed-sha"
 
 [[ "${1:-}" == "--install-timer" ]] && INSTALL_TIMER=true
 if [[ -n "${1:-}" && "${INSTALL_TIMER}" != true ]]; then echo "Usage: $0 [--install-timer]" >&2; exit 2; fi
 if [[ ${EUID} -ne 0 ]]; then echo "Run this script with sudo." >&2; exit 1; fi
 
-for command in git nginx certbot curl openssl ss getent systemctl install runuser flock sed; do
+for command in git nginx certbot curl openssl ss getent systemctl install runuser flock sed cmp; do
   command -v "${command}" >/dev/null 2>&1 || { echo "Missing command: ${command}" >&2; exit 1; }
 done
 id "${DEPLOY_USER}" >/dev/null 2>&1 || { echo "Unknown deployment user: ${DEPLOY_USER}" >&2; exit 1; }
@@ -64,6 +68,7 @@ else
     changed=true
   fi
 fi
+current_sha="$(run_shell "git -C '${APP_DIR}' rev-parse HEAD")"
 
 env_file="${APP_DIR}/server/.env"
 if [[ ! -f "${env_file}" ]]; then
@@ -83,9 +88,13 @@ fi
 
 healthy=false
 curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1 && healthy=true
+deployed_sha=""
+[[ -f "${DEPLOYED_SHA_FILE}" ]] && deployed_sha="$(<"${DEPLOYED_SHA_FILE}")"
 ready=false
-if [[ "${changed}" == false && "${healthy}" == true ]] && systemctl is-active --quiet "${APP_SERVICE}" && \
-   [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" && -f "${NGINX_SITE}" ]] && grep -q 'listen 443' "${NGINX_SITE}"; then ready=true; fi
+if [[ "${changed}" == false && "${healthy}" == true && "${deployed_sha}" == "${current_sha}" ]] && \
+   systemctl is-active --quiet "${APP_SERVICE}" && \
+   [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" && -f "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" ]] && \
+   [[ -f "${NGINX_SITE}" ]] && cmp -s "${NGINX_TLS}" "${NGINX_SITE}"; then ready=true; fi
 if [[ "${ready}" == true ]]; then
   [[ "${INSTALL_TIMER}" == true ]] && install_timer
   echo "Portfolio is already up to date and healthy."
@@ -107,17 +116,25 @@ systemctl daemon-reload
 systemctl enable "${APP_SERVICE}"
 systemctl restart "${APP_SERVICE}"
 
-install -m 0644 "${APP_DIR}/deploy/portfolio.toscani-tenekeu.com.nginx" "${NGINX_SITE}"
-ln -sfn "${NGINX_SITE}" "${NGINX_LINK}"
-nginx -t
-systemctl reload nginx
 curl -fsS --retry 10 --retry-delay 2 "http://127.0.0.1:${PORT}/health" >/dev/null
 
 resolved_ips="$(getent ahostsv4 "${DOMAIN}" | awk '{print $1}' | sort -u)"
 grep -Fxq "${EXPECTED_IP}" <<< "${resolved_ips}" || { echo "DNS must resolve ${DOMAIN} to ${EXPECTED_IP}; found: ${resolved_ips:-none}" >&2; exit 1; }
-certbot --nginx --domain "${DOMAIN}" --email "${CERTBOT_EMAIL}" --agree-tos --non-interactive --redirect --keep-until-expiring
+
+if [[ ! -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" || ! -f "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" ]]; then
+  install -m 0644 "${NGINX_BOOTSTRAP}" "${NGINX_SITE}"
+  ln -sfn "${NGINX_SITE}" "${NGINX_LINK}"
+  nginx -t
+  systemctl reload nginx
+  certbot certonly --nginx --domain "${DOMAIN}" --email "${CERTBOT_EMAIL}" --agree-tos --non-interactive --keep-until-expiring
+fi
+
+install -m 0644 "${NGINX_TLS}" "${NGINX_SITE}"
+ln -sfn "${NGINX_SITE}" "${NGINX_LINK}"
 nginx -t
 systemctl reload nginx
-curl -fsS --retry 5 --retry-delay 2 "https://${DOMAIN}/health" >/dev/null
+curl -fsS --retry 5 --retry-delay 2 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/health" >/dev/null
+install -d -m 0755 "${STATE_DIR}"
+printf '%s\n' "${current_sha}" > "${DEPLOYED_SHA_FILE}"
 [[ "${INSTALL_TIMER}" == true ]] && install_timer
 echo "Deployment complete: https://${DOMAIN}"
