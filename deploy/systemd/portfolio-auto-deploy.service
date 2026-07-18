@@ -1,0 +1,10 @@
+[Unit]
+Description=Update and deploy portfolio.toscani-tenekeu.com
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/portfolio-auto-deploy
+ExecStart=/opt/portfolio.toscani-tenekeu.com/deploy/vps-deploy.sh
+Nice=10

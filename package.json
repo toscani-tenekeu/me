@@ -1,0 +1,18 @@
+{
+  "name": "portfolio-toscani-tenekeu",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Portfolio of Toscani Tenekeu — full-stack developer and founder of KmerHosting.",
+  "workspaces": ["client", "server"],
+  "scripts": {
+    "dev": "concurrently -k -n client,server -c blue,green \"npm run dev --workspace client\" \"npm run dev --workspace server\"",
+    "build": "npm run build --workspace client",
+    "type-check": "npm run type-check --workspace client",
+    "test": "npm run test:unit --workspace client -- --run",
+    "start": "npm start --workspace server",
+    "db:init": "npm run db:init --workspace server"
+  },
+  "devDependencies": { "concurrently": "^9.2.1" },
+  "engines": { "node": "^20.19.0 || >=22.12.0", "npm": ">=10" },
+  "license": "MIT"
+}

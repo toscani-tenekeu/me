@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+DOMAIN="portfolio.toscani-tenekeu.com"
+EXPECTED_IP="${EXPECTED_IP:-84.247.132.49}"
+APP_DIR="/opt/${DOMAIN}"
+REPOSITORY="git@github.com:toscani-tenekeu/me.git"
+BRANCH="master"
+PORT="1245"
+APP_SERVICE="${DOMAIN}.service"
+NGINX_SITE="/etc/nginx/sites-available/${DOMAIN}"
+NGINX_LINK="/etc/nginx/sites-enabled/${DOMAIN}"
+CERTBOT_EMAIL="${CERTBOT_EMAIL:-hello@toscani.tenekeu.com}"
+DEPLOY_USER="${DEPLOY_USER:-${SUDO_USER:-root}}"
+INSTALL_TIMER=false
+
+[[ "${1:-}" == "--install-timer" ]] && INSTALL_TIMER=true
+if [[ -n "${1:-}" && "${INSTALL_TIMER}" != true ]]; then echo "Usage: $0 [--install-timer]" >&2; exit 2; fi
+if [[ ${EUID} -ne 0 ]]; then echo "Run this script with sudo." >&2; exit 1; fi
+
+for command in git nginx certbot curl openssl ss getent systemctl install runuser flock sed; do
+  command -v "${command}" >/dev/null 2>&1 || { echo "Missing command: ${command}" >&2; exit 1; }
+done
+id "${DEPLOY_USER}" >/dev/null 2>&1 || { echo "Unknown deployment user: ${DEPLOY_USER}" >&2; exit 1; }
+
+DEPLOY_GROUP="$(id -gn "${DEPLOY_USER}")"
+DEPLOY_HOME="$(getent passwd "${DEPLOY_USER}" | cut -d: -f6)"
+run_as_deployer() {
+  if [[ "${DEPLOY_USER}" == root ]]; then env HOME="${DEPLOY_HOME}" "$@"; else runuser -u "${DEPLOY_USER}" -- env HOME="${DEPLOY_HOME}" "$@"; fi
+}
+run_shell() { run_as_deployer bash -lc "$1"; }
+
+install_timer() {
+  local tmp
+  tmp="$(mktemp)"
+  printf 'DEPLOY_USER=%q\nCERTBOT_EMAIL=%q\nEXPECTED_IP=%q\n' "${DEPLOY_USER}" "${CERTBOT_EMAIL}" "${EXPECTED_IP}" > "${tmp}"
+  install -m 0644 "${tmp}" /etc/default/portfolio-auto-deploy
+  rm -f "${tmp}"
+  install -m 0644 "${APP_DIR}/deploy/systemd/portfolio-auto-deploy.service" /etc/systemd/system/portfolio-auto-deploy.service
+  install -m 0644 "${APP_DIR}/deploy/systemd/portfolio-auto-deploy.timer" /etc/systemd/system/portfolio-auto-deploy.timer
+  systemctl daemon-reload
+  systemctl enable --now portfolio-auto-deploy.timer
+}
+
+exec 9>/run/lock/portfolio-auto-deploy.lock
+flock -n 9 || { echo "Another deployment is running."; exit 0; }
+run_shell 'command -v node >/dev/null && command -v npm >/dev/null' || { echo "node and npm must be available to ${DEPLOY_USER}." >&2; exit 1; }
+NODE_BIN="$(run_shell 'command -v node')"
+NODE_MAJOR="$(run_shell "node -p 'process.versions.node.split(\".\")[0]'")"
+(( NODE_MAJOR >= 20 )) || { echo "Node.js 20 or newer is required." >&2; exit 1; }
+
+if [[ ! -d "${APP_DIR}/.git" ]]; then
+  install -d -o "${DEPLOY_USER}" -g "${DEPLOY_GROUP}" "${APP_DIR}"
+  run_shell "git clone --branch '${BRANCH}' '${REPOSITORY}' '${APP_DIR}'"
+  changed=true
+else
+  run_shell "git -C '${APP_DIR}' fetch --prune origin '${BRANCH}'"
+  local_sha="$(run_shell "git -C '${APP_DIR}' rev-parse HEAD")"
+  remote_sha="$(run_shell "git -C '${APP_DIR}' rev-parse 'origin/${BRANCH}'")"
+  changed=false
+  if [[ "${local_sha}" != "${remote_sha}" ]]; then
+    run_shell "git -C '${APP_DIR}' checkout '${BRANCH}' && git -C '${APP_DIR}' pull --ff-only origin '${BRANCH}'"
+    changed=true
+  fi
+fi
+
+env_file="${APP_DIR}/server/.env"
+if [[ ! -f "${env_file}" ]]; then
+  admin_user="${ADMIN_USER:-admin}"
+  admin_pass="${ADMIN_PASS:-}"
+  if [[ -z "${admin_pass}" && -t 0 ]]; then read -r -s -p "Admin password (12+ characters): " admin_pass; echo; fi
+  [[ ${#admin_pass} -ge 12 ]] || { echo "Set ADMIN_PASS to at least 12 characters." >&2; exit 1; }
+  tmp="$(mktemp)"
+  {
+    printf 'NODE_ENV=production\nPORTFOLIO_HOST=127.0.0.1\nPORTFOLIO_PORT=%s\n' "${PORT}"
+    printf 'ADMIN_USER="%s"\nADMIN_PASS="%s"\nSESSION_SECRET=%s\n' "${admin_user//\"/\\\"}" "${admin_pass//\"/\\\"}" "$(openssl rand -hex 48)"
+  } > "${tmp}"
+  install -m 0600 -o "${DEPLOY_USER}" -g "${DEPLOY_GROUP}" "${tmp}" "${env_file}"
+  rm -f "${tmp}"
+  changed=true
+fi
+
+healthy=false
+curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1 && healthy=true
+ready=false
+if [[ "${changed}" == false && "${healthy}" == true ]] && systemctl is-active --quiet "${APP_SERVICE}" && \
+   [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" && -f "${NGINX_SITE}" ]] && grep -q 'listen 443' "${NGINX_SITE}"; then ready=true; fi
+if [[ "${ready}" == true ]]; then
+  [[ "${INSTALL_TIMER}" == true ]] && install_timer
+  echo "Portfolio is already up to date and healthy."
+  exit 0
+fi
+
+if ss -H -ltn "sport = :${PORT}" | grep -q . && ! systemctl is-active --quiet "${APP_SERVICE}"; then
+  echo "Port ${PORT} is already in use." >&2
+  exit 1
+fi
+
+run_shell "cd '${APP_DIR}' && npm ci && npm run build && npm run db:init"
+tmp="$(mktemp)"
+sed -e "s|__DEPLOY_USER__|${DEPLOY_USER}|g" -e "s|__DEPLOY_GROUP__|${DEPLOY_GROUP}|g" -e "s|__NODE_BIN__|${NODE_BIN}|g" \
+  "${APP_DIR}/deploy/systemd/portfolio-app.service.template" > "${tmp}"
+install -m 0644 "${tmp}" "/etc/systemd/system/${APP_SERVICE}"
+rm -f "${tmp}"
+systemctl daemon-reload
+systemctl enable "${APP_SERVICE}"
+systemctl restart "${APP_SERVICE}"
+
+install -m 0644 "${APP_DIR}/deploy/portfolio.toscani-tenekeu.com.nginx" "${NGINX_SITE}"
+ln -sfn "${NGINX_SITE}" "${NGINX_LINK}"
+nginx -t
+systemctl reload nginx
+curl -fsS --retry 10 --retry-delay 2 "http://127.0.0.1:${PORT}/health" >/dev/null
+
+resolved_ips="$(getent ahostsv4 "${DOMAIN}" | awk '{print $1}' | sort -u)"
+grep -Fxq "${EXPECTED_IP}" <<< "${resolved_ips}" || { echo "DNS must resolve ${DOMAIN} to ${EXPECTED_IP}; found: ${resolved_ips:-none}" >&2; exit 1; }
+certbot --nginx --domain "${DOMAIN}" --email "${CERTBOT_EMAIL}" --agree-tos --non-interactive --redirect --keep-until-expiring
+nginx -t
+systemctl reload nginx
+curl -fsS --retry 5 --retry-delay 2 "https://${DOMAIN}/health" >/dev/null
+[[ "${INSTALL_TIMER}" == true ]] && install_timer
+echo "Deployment complete: https://${DOMAIN}"

@@ -1,0 +1,14 @@
+node_modules/
+client/dist/
+client/test-results/
+client/playwright-report/
+server/.env
+server/_portfolio.db
+server/_portfolio.db-shm
+server/_portfolio.db-wal
+*.log
+.DS_Store
+.idea/
+.vscode/
+coverage/
+*.tsbuildinfo
