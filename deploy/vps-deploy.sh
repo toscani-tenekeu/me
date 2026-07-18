@@ -23,7 +23,7 @@ DEPLOYED_SHA_FILE="${STATE_DIR}/deployed-sha"
 if [[ -n "${1:-}" && "${INSTALL_TIMER}" != true ]]; then echo "Usage: $0 [--install-timer]" >&2; exit 2; fi
 if [[ ${EUID} -ne 0 ]]; then echo "Run this script with sudo." >&2; exit 1; fi
 
-for command in git nginx certbot curl openssl ss getent systemctl journalctl install runuser flock sed cmp; do
+for command in git nginx certbot curl openssl ss getent systemctl journalctl install runuser flock sed cmp grep; do
   command -v "${command}" >/dev/null 2>&1 || { echo "Missing command: ${command}" >&2; exit 1; }
 done
 id "${DEPLOY_USER}" >/dev/null 2>&1 || { echo "Unknown deployment user: ${DEPLOY_USER}" >&2; exit 1; }
@@ -54,7 +54,8 @@ certificate_covers_domain() {
   local certificate="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
   local private_key="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
   [[ -f "${certificate}" && -f "${private_key}" ]] && \
-    openssl x509 -in "${certificate}" -noout -checkhost "${DOMAIN}" >/dev/null 2>&1
+    openssl x509 -in "${certificate}" -noout -checkhost "${DOMAIN}" 2>/dev/null | \
+      grep -Fq "does match certificate"
 }
 
 install_timer() {
