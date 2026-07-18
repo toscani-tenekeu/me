@@ -5,8 +5,7 @@ Source code for [portfolio.toscani-tenekeu.com](https://portfolio.toscani-teneke
 ## Stack
 
 - Vue 3, TypeScript, Vite and Tailwind CSS
-- Express 5, persistent SQLite sessions and `better-sqlite3`
-- systemd, Nginx and Let's Encrypt in production
+- Express 5, SQLite and `better-sqlite3`
 
 ## Verified projects
 
@@ -32,25 +31,19 @@ npm run dev
 
 Validation commands: `npm run lint --workspace client`, `npm run build`, and `npm test`.
 
-## VPS deployment
+## Deployment
 
-The deployment uses `/opt/portfolio.toscani-tenekeu.com`, port `1245`, the Nginx site `/etc/nginx/sites-available/portfolio.toscani-tenekeu.com` and a systemd timer that checks `master` every two minutes.
+From the VPS account with working GitHub SSH access:
 
 ```bash
 sudo install -d -o "$USER" -g "$(id -gn)" /opt/portfolio.toscani-tenekeu.com
 git clone git@github.com:toscani-tenekeu/me.git /opt/portfolio.toscani-tenekeu.com
 
-sudo DEPLOY_USER="$USER" ADMIN_PASS='choose-a-strong-password' \
+sudo DEPLOY_USER="$USER" \
   bash /opt/portfolio.toscani-tenekeu.com/deploy/vps-deploy.sh --install-timer
 ```
 
-Node.js, npm, Git, Nginx and Certbot must already be installed. The script does not install software. It builds the application, initializes SQLite, starts the application service, configures Nginx, verifies that DNS resolves to `84.247.132.49`, obtains the certificate and enables automatic updates.
-
-```bash
-systemctl status portfolio.toscani-tenekeu.com.service
-systemctl status portfolio-auto-deploy.timer
-journalctl -u portfolio-auto-deploy.service -n 100 --no-pager
-```
+The script securely prompts for the portfolio administrator password and completes the deployment.
 
 ## License
 

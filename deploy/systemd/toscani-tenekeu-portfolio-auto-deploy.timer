@@ -1,12 +1,12 @@
 [Unit]
-Description=Check GitHub for portfolio updates every two minutes
+Description=Check GitHub for Toscani Tenekeu portfolio updates
 
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=2min
 RandomizedDelaySec=20s
 Persistent=true
-Unit=portfolio-auto-deploy.service
+Unit=toscani-tenekeu-portfolio-auto-deploy.service
 
 [Install]
 WantedBy=timers.target

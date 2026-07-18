@@ -8,6 +8,7 @@ REPOSITORY="git@github.com:toscani-tenekeu/me.git"
 BRANCH="master"
 PORT="1245"
 APP_SERVICE="${DOMAIN}.service"
+AUTO_DEPLOY_NAME="toscani-tenekeu-portfolio-auto-deploy"
 NGINX_SITE="/etc/nginx/sites-available/${DOMAIN}"
 NGINX_LINK="/etc/nginx/sites-enabled/${DOMAIN}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-hello@toscani.tenekeu.com}"
@@ -34,15 +35,15 @@ install_timer() {
   local tmp
   tmp="$(mktemp)"
   printf 'DEPLOY_USER=%q\nCERTBOT_EMAIL=%q\nEXPECTED_IP=%q\n' "${DEPLOY_USER}" "${CERTBOT_EMAIL}" "${EXPECTED_IP}" > "${tmp}"
-  install -m 0644 "${tmp}" /etc/default/portfolio-auto-deploy
+  install -m 0644 "${tmp}" "/etc/default/${AUTO_DEPLOY_NAME}"
   rm -f "${tmp}"
-  install -m 0644 "${APP_DIR}/deploy/systemd/portfolio-auto-deploy.service" /etc/systemd/system/portfolio-auto-deploy.service
-  install -m 0644 "${APP_DIR}/deploy/systemd/portfolio-auto-deploy.timer" /etc/systemd/system/portfolio-auto-deploy.timer
+  install -m 0644 "${APP_DIR}/deploy/systemd/${AUTO_DEPLOY_NAME}.service" "/etc/systemd/system/${AUTO_DEPLOY_NAME}.service"
+  install -m 0644 "${APP_DIR}/deploy/systemd/${AUTO_DEPLOY_NAME}.timer" "/etc/systemd/system/${AUTO_DEPLOY_NAME}.timer"
   systemctl daemon-reload
-  systemctl enable --now portfolio-auto-deploy.timer
+  systemctl enable --now "${AUTO_DEPLOY_NAME}.timer"
 }
 
-exec 9>/run/lock/portfolio-auto-deploy.lock
+exec 9>"/run/lock/${AUTO_DEPLOY_NAME}.lock"
 flock -n 9 || { echo "Another deployment is running."; exit 0; }
 run_shell 'command -v node >/dev/null && command -v npm >/dev/null' || { echo "node and npm must be available to ${DEPLOY_USER}." >&2; exit 1; }
 NODE_BIN="$(run_shell 'command -v node')"
