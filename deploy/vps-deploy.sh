@@ -50,6 +50,13 @@ wait_for_app() {
   return 1
 }
 
+certificate_covers_domain() {
+  local certificate="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
+  local private_key="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
+  [[ -f "${certificate}" && -f "${private_key}" ]] && \
+    openssl x509 -in "${certificate}" -noout -checkhost "${DOMAIN}" >/dev/null 2>&1
+}
+
 install_timer() {
   local tmp
   tmp="$(mktemp)"
@@ -108,7 +115,7 @@ deployed_sha=""
 ready=false
 if [[ "${changed}" == false && "${healthy}" == true && "${deployed_sha}" == "${current_sha}" ]] && \
    systemctl is-active --quiet "${APP_SERVICE}" && \
-   [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" && -f "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" ]] && \
+   certificate_covers_domain && \
    [[ -f "${NGINX_SITE}" ]] && cmp -s "${NGINX_TLS}" "${NGINX_SITE}"; then ready=true; fi
 if [[ "${ready}" == true ]]; then
   [[ "${INSTALL_TIMER}" == true ]] && install_timer
@@ -136,13 +143,16 @@ wait_for_app
 resolved_ips="$(getent ahostsv4 "${DOMAIN}" | awk '{print $1}' | sort -u)"
 grep -Fxq "${EXPECTED_IP}" <<< "${resolved_ips}" || { echo "DNS must resolve ${DOMAIN} to ${EXPECTED_IP}; found: ${resolved_ips:-none}" >&2; exit 1; }
 
-if [[ ! -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" || ! -f "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" ]]; then
+if ! certificate_covers_domain; then
   install -m 0644 "${NGINX_BOOTSTRAP}" "${NGINX_SITE}"
   ln -sfn "${NGINX_SITE}" "${NGINX_LINK}"
   nginx -t
   systemctl reload nginx
-  certbot certonly --nginx --domain "${DOMAIN}" --email "${CERTBOT_EMAIL}" --agree-tos --non-interactive --keep-until-expiring
+  certbot certonly --nginx --cert-name "${DOMAIN}" --domain "${DOMAIN}" --email "${CERTBOT_EMAIL}" \
+    --agree-tos --non-interactive --force-renewal
 fi
+
+certificate_covers_domain || { echo "Certificate does not cover ${DOMAIN}." >&2; exit 1; }
 
 install -m 0644 "${NGINX_TLS}" "${NGINX_SITE}"
 ln -sfn "${NGINX_SITE}" "${NGINX_LINK}"
