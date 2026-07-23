@@ -1,6 +1,6 @@
 # Toscani Tenekeu — Portfolio
 
-Source code for [portfolio.toscani-tenekeu.com](https://portfolio.toscani-tenekeu.com), the portfolio of Toscani TENEKEU MODJOU — founder of KmerHosting and full-stack developer.
+Source code for [portfolio.toscani-tenekeu.com](https://portfolio.toscani-tenekeu.com), my personnal portfolio.
 
 ## Stack
 
