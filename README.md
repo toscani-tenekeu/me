@@ -1,6 +1,6 @@
 # Toscani Tenekeu — Portfolio
 
-Source code for [portfolio.toscani-tenekeu.com](https://portfolio.toscani-tenekeu.com), my personnal portfolio.
+Source code for [portfolio.toscani-tenekeu.com](https://portfolio.toscani-tenekeu.com), my personal portfolio.
 
 ## Stack
 
